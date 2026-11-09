@@ -473,6 +473,10 @@ class Parser:
                 limit = first
             if self.accept("OFFSET"):
                 offset = self.integer()
+        if limit is not None and limit < 0:
+            raise sql_error("invalid_sql", "LIMIT must be non-negative")
+        if offset < 0:
+            raise sql_error("invalid_sql", "OFFSET must be non-negative")
         return {
             "kind": "select",
             "table": table,
