@@ -82,6 +82,8 @@ python tests/run_crash.py    # SIGKILL and torn-journal recovery
 python tests/bench_small.py  # 10k x 128-d smoke benchmark
 ```
 
-The development machine does not have Docker, so the image itself was not
-built locally. The Dockerfile uses a pinned NumPy release and does not require
-network access at runtime.
+The latest local benchmark measured 18.612 seconds for 10,000
+128-dimensional writes and 3.034 seconds for 1,000 TopK queries on a Windows
+development host. The development machine does not have Docker, so the image
+itself was not built locally. The Dockerfile uses a pinned NumPy release and
+does not require network access at runtime.

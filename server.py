@@ -11,7 +11,6 @@ import os
 import re
 import signal
 import sys
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -71,26 +70,36 @@ def tokenize(sql: str) -> list[Token]:
             quote = ch
             start = i
             i += 1
-            out: list[str] = []
-            while i < n:
-                if sql[i] == quote:
-                    if i + 1 < n and sql[i + 1] == quote:
-                        out.append(quote)
-                        i += 2
-                        continue
-                    i += 1
-                    break
-                if sql[i] == "\\" and i + 1 < n:
-                    esc = sql[i + 1]
-                    mapping = {"n": "\n", "r": "\r", "t": "\t", "0": "\0"}
-                    out.append(mapping.get(esc, esc))
-                    i += 2
+            search_from = i
+            end = -1
+            while True:
+                end = sql.find(quote, search_from)
+                if end < 0:
+                    raise sql_error("invalid_sql", "unterminated string")
+                if end + 1 < n and sql[end + 1] == quote:
+                    search_from = end + 2
                     continue
-                out.append(sql[i])
-                i += 1
+                break
+            raw = sql[i:end]
+            if "\\" not in raw:
+                value = raw.replace(quote + quote, quote)
             else:
+                out: list[str] = []
+                j = 0
+                while j < len(raw):
+                    if raw[j] == "\\" and j + 1 < len(raw):
+                        esc = raw[j + 1]
+                        mapping = {"n": "\n", "r": "\r", "t": "\t", "0": "\0"}
+                        out.append(mapping.get(esc, esc))
+                        j += 2
+                    else:
+                        out.append(raw[j])
+                        j += 1
+                value = "".join(out)
+            i = end + 1
+            if end < start:
                 raise sql_error("invalid_sql", "unterminated string")
-            result.append(Token("STRING", "".join(out), start))
+            result.append(Token("STRING", value, start))
             continue
         if ch == "`":
             start = i
@@ -136,7 +145,7 @@ def tokenize(sql: str) -> list[Token]:
                 result.append(Token("OP", ch, i))
                 i += 1
             continue
-        if ch in "(),[]*+-":
+        if ch in "(),[]*+-.":
             result.append(Token(ch, ch, i))
             i += 1
             continue
@@ -176,7 +185,10 @@ class Parser:
         tok = self.take()
         if tok.kind != "WORD":
             raise sql_error("invalid_sql", "expected identifier")
-        return tok.value
+        name = tok.value
+        while self.accept("."):
+            name = self.ident()
+        return name
 
     def integer(self) -> int:
         sign = 1
@@ -201,7 +213,7 @@ class Parser:
 
     def vector(self) -> np.ndarray:
         if self.peek().kind == "STRING":
-            raw = self.take().value.strip()
+            return parse_vector_text(self.take().value)
         else:
             self.expect("[")
             values: list[str] = []
@@ -213,6 +225,11 @@ class Parser:
                     if component.kind != "NUMBER":
                         raise sql_error("invalid_vector", "expected numeric vector component")
                     values.append("-" + component.value)
+                elif self.accept("+"):
+                    component = self.take()
+                    if component.kind != "NUMBER":
+                        raise sql_error("invalid_vector", "expected numeric vector component")
+                    values.append(component.value)
                 else:
                     component = self.take()
                     if component.kind != "NUMBER":
@@ -223,16 +240,7 @@ class Parser:
             except ValueError:
                 raise sql_error("invalid_vector", "invalid vector")
             return validate_vector(np.asarray(vals, dtype=np.float64))
-        if not raw.startswith("[") or not raw.endswith("]"):
-            raise sql_error("invalid_vector", "vector must be enclosed in brackets")
-        body = raw[1:-1].strip()
-        if not body:
-            return validate_vector(np.asarray([], dtype=np.float64))
-        try:
-            vals = [float(x.strip()) for x in body.split(",")]
-        except ValueError:
-            raise sql_error("invalid_vector", "invalid vector component")
-        return validate_vector(np.asarray(vals, dtype=np.float64))
+        raise sql_error("invalid_vector", "invalid vector literal")
 
     def string(self) -> str:
         tok = self.take()
@@ -306,11 +314,13 @@ class Parser:
         self.expect("(")
         columns: list[Column] = []
         primary: str | None = None
+        primary_count = 0
         while True:
             if self.accept("PRIMARY"):
                 self.expect("KEY")
                 self.expect("(")
                 primary = self.ident()
+                primary_count += 1
                 self.expect(")")
             else:
                 name = self.ident()
@@ -331,6 +341,7 @@ class Parser:
                 if self.accept("PRIMARY"):
                     self.expect("KEY")
                     primary = name
+                    primary_count += 1
                 columns.append(Column(name, typ, size))
             if self.accept(")"):
                 break
@@ -340,6 +351,7 @@ class Parser:
             "table": table_name,
             "columns": columns,
             "primary": primary,
+            "primary_count": primary_count,
             "if_not_exists": if_not_exists,
         }
 
@@ -413,9 +425,14 @@ class Parser:
                 if self.peek().kind == "WORD" and self.peek().value.upper() == "L2_DISTANCE":
                     self.take()
                     self.expect("(")
-                    column = self.ident()
-                    self.expect(",")
-                    vector = self.vector()
+                    if self.peek().kind == "STRING" or self.peek().kind == "[":
+                        vector = self.vector()
+                        self.expect(",")
+                        column = self.ident()
+                    else:
+                        column = self.ident()
+                        self.expect(",")
+                        vector = self.vector()
                     self.expect(")")
                     proj: dict[str, Any] = {
                         "type": "distance",
@@ -448,7 +465,12 @@ class Parser:
         limit = None
         offset = 0
         if self.accept("LIMIT"):
-            limit = self.integer()
+            first = self.integer()
+            if self.accept(","):
+                offset = first
+                limit = self.integer()
+            else:
+                limit = first
             if self.accept("OFFSET"):
                 offset = self.integer()
         return {
@@ -520,6 +542,26 @@ def validate_vector(raw: np.ndarray) -> np.ndarray:
     return vec
 
 
+_VECTOR_NUMBER = re.compile(
+    r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?"
+)
+_VECTOR_BODY = re.compile(
+    rf"\s*{_VECTOR_NUMBER.pattern}\s*(?:,\s*{_VECTOR_NUMBER.pattern}\s*)*"
+)
+
+
+def parse_vector_text(raw: str) -> np.ndarray:
+    text = raw.strip()
+    if not text.startswith("[") or not text.endswith("]"):
+        raise sql_error("invalid_vector", "vector must be enclosed in brackets")
+    body = text[1:-1].strip()
+    if not body:
+        return validate_vector(np.asarray([], dtype=np.float64))
+    if _VECTOR_BODY.fullmatch(body) is not None:
+        return validate_vector(np.fromstring(body, sep=",", dtype=np.float64))
+    raise sql_error("invalid_vector", "vector contains an invalid component")
+
+
 def compare(left: Any, op: str, right: Any) -> bool:
     if op == "=":
         return left == right
@@ -547,7 +589,7 @@ class Table:
         self.vector_indexes: dict[str, str] = {}
         self.version = 0
         self._cache: tuple[
-            np.ndarray, np.ndarray, dict[int, int], list[np.ndarray]
+            np.ndarray, np.ndarray, np.ndarray, dict[int, int], list[np.ndarray]
         ] | None = None
 
     def index_of(self, name: str) -> int:
@@ -565,7 +607,9 @@ class Table:
 
     def cached_matrix(
         self,
-    ) -> tuple[np.ndarray, np.ndarray, dict[int, int], list[np.ndarray]]:
+    ) -> tuple[
+        np.ndarray, np.ndarray, np.ndarray, dict[int, int], list[np.ndarray]
+    ]:
         if self._cache is not None:
             return self._cache
         primary: list[int] = []
@@ -581,6 +625,9 @@ class Table:
             if vector_indexes:
                 matrix[i] = row[vector_indexes[0]]
         pks = np.asarray(primary, dtype=np.int64)
+        vector_norms = np.einsum(
+            "ij,ij->i", matrix.astype(np.float64), matrix.astype(np.float64)
+        )
         position = {int(pk): i for i, pk in enumerate(primary)}
         columns: list[np.ndarray] = []
         rows = list(self.rows.values())
@@ -597,7 +644,7 @@ class Table:
                 columns.append(matrix)
             else:
                 columns.append(np.asarray([row[column_index] for row in rows], dtype=object))
-        self._cache = (pks, matrix, position, columns)
+        self._cache = (pks, matrix, vector_norms, position, columns)
         return self._cache
 
     def changed(self) -> None:
@@ -755,12 +802,18 @@ class Database:
             raise sql_error("table_already_exists", f"table {name} already exists")
         columns = stmt["columns"]
         primary = stmt["primary"]
-        if primary is None:
+        if primary is None or stmt.get("primary_count") != 1:
             raise sql_error("invalid_table", "a primary key is required")
+        names = [column.name.lower() for column in columns]
+        if len(names) != len(set(names)):
+            raise sql_error("invalid_table", "duplicate column name")
         if not any(c.name.lower() == primary.lower() and c.kind == "BIGINT" for c in columns):
             raise sql_error("invalid_table", "primary key must be BIGINT")
         if sum(1 for c in columns if c.kind == "VECTOR") > 1:
             raise sql_error("invalid_table", "at most one vector column is allowed")
+        for column in columns:
+            if column.kind in ("VARCHAR", "VECTOR") and column.size <= 0:
+                raise sql_error("invalid_table", f"{column.name} requires a positive size")
         self.tables[key] = Table(name, columns, primary)
 
     def convert_value(self, col: Column, raw: Any) -> Any:
@@ -778,7 +831,7 @@ class Database:
             return raw
         if col.kind == "VECTOR":
             if isinstance(raw, str):
-                vec = Parser(raw).vector()
+                vec = parse_vector_text(raw)
             elif isinstance(raw, np.ndarray):
                 vec = validate_vector(raw)
             else:
@@ -888,7 +941,7 @@ class Database:
         for name, _ in stmt["order"]:
             if name.lower() not in available:
                 raise sql_error("column_not_found", f"unknown column {name}")
-        pks, matrix, _positions, cached_columns = table.cached_matrix()
+        pks, matrix, vector_norms, _positions, cached_columns = table.cached_matrix()
         matched_positions = self.filter_positions(table, stmt["where"], cached_columns)
 
         distance_projection = next(
@@ -903,11 +956,17 @@ class Database:
             if query.size != table.columns[vector_index].size:
                 raise sql_error("dimension_mismatch", "query vector dimension mismatch")
             if matched_positions.size:
-                diff = (
-                    matrix[matched_positions].astype(np.float64)
-                    - query.astype(np.float64)
+                candidate_vectors = matrix[matched_positions]
+                if candidate_vectors.size and np.max(np.abs(candidate_vectors)) > 1.0e18:
+                    products = candidate_vectors.astype(np.float64) @ query.astype(np.float64)
+                else:
+                    products = candidate_vectors @ query
+                squared = (
+                    vector_norms[matched_positions]
+                    + np.dot(query.astype(np.float64), query.astype(np.float64))
+                    - 2.0 * products
                 )
-                distances = np.sqrt(np.einsum("ij,ij->i", diff, diff))
+                distances = np.sqrt(np.maximum(squared, 0.0))
             else:
                 distances = np.empty(0, dtype=np.float64)
 
@@ -932,10 +991,45 @@ class Database:
 
         matched_pks = pks[matched_positions]
         if order_keys:
-            object_descending = any(
-                values.dtype.kind == "O" and desc
-                for (_, desc), values in zip(stmt["order"], order_keys)
+            topk_order = (
+                distance_projection is not None
+                and len(stmt["order"]) == 1
+                and stmt["order"][0][0].lower()
+                == str(distance_projection["alias"]).lower()
+                and stmt["limit"] is not None
             )
+            if topk_order:
+                assert distances is not None
+                wanted = max(int(stmt["offset"]) + int(stmt["limit"]), 0)
+                if wanted < len(matched_positions):
+                    if wanted == 0:
+                        candidate_indexes = np.empty(0, dtype=np.int64)
+                    else:
+                        partition_key = (
+                            -distances
+                            if stmt["order"][0][1]
+                            else distances
+                        )
+                        threshold = np.partition(
+                            partition_key, wanted - 1
+                        )[wanted - 1]
+                        # Keep every row tied at the Kth distance; the primary-key
+                        # tie-break must run before the final LIMIT.
+                        candidate_indexes = np.flatnonzero(
+                            partition_key <= threshold
+                        )
+                    matched_positions = matched_positions[candidate_indexes]
+                    distances = distances[candidate_indexes]
+                    matched_pks = pks[matched_positions]
+                    order_keys = [
+                        -distances if stmt["order"][0][1] else distances
+                    ]
+                object_descending = False
+            else:
+                object_descending = any(
+                    values.dtype.kind == "O" and desc
+                    for (_, desc), values in zip(stmt["order"], order_keys)
+                )
             if object_descending:
                 order_positions = sorted(
                     range(len(matched_positions)),
@@ -1020,16 +1114,6 @@ class Database:
             else:
                 raise sql_error("unsupported_sql", f"unsupported operator {op}")
         return np.flatnonzero(mask)
-
-
-class _Descending:
-    __slots__ = ("value",)
-
-    def __init__(self, value: Any):
-        self.value = value
-
-    def __lt__(self, other: "_Descending") -> bool:
-        return self.value > other.value
 
 
 def split_statements(text: str, at_eof: bool) -> tuple[list[str], str]:

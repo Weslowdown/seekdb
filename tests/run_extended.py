@@ -24,6 +24,16 @@ def main() -> int:
                 ["OK"],
             )
             assert_response(
+                client.execute("CREATE TABLE bad_dim (id BIGINT PRIMARY KEY, v VECTOR(0))"),
+                ["ERROR invalid_table: v requires a positive size"],
+            )
+            assert_response(
+                client.execute(
+                    "CREATE TABLE bad_dup (id BIGINT PRIMARY KEY, x BIGINT, x VARCHAR(2))"
+                ),
+                ["ERROR invalid_table: duplicate column name"],
+            )
+            assert_response(
                 client.execute(
                     "INSERT INTO t VALUES (-9223372036854775808, 'a😀', '[1,2]'), "
                     "(9223372036854775807, 'z', '[-1,2]')"
@@ -40,7 +50,7 @@ def main() -> int:
             )
             assert_response(
                 client.execute("INSERT INTO t VALUES (3, 'x', '[NaN,0]')"),
-                ["ERROR invalid_vector: expected numeric vector component"],
+                ["ERROR invalid_vector: vector contains an invalid component"],
             )
             assert_response(
                 client.execute("INSERT INTO t VALUES (3, 'x', '[1e100,0]')"),
@@ -89,6 +99,13 @@ def main() -> int:
             )
             assert_response(
                 client.execute("SELECT id, L2_DISTANCE(v, '[0,0]') AS d FROM t WHERE s = 'c'"),
+                ["7\t0.000000"],
+            )
+            assert_response(
+                client.execute(
+                    "SELECT t.id, L2_DISTANCE('[0,0]', t.v) AS d "
+                    "FROM t ORDER BY d ASC LIMIT 0, 1"
+                ),
                 ["7\t0.000000"],
             )
         finally:

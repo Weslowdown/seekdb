@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import tempfile
 import time
 from pathlib import Path
@@ -15,15 +16,20 @@ def vector_sql(vector: np.ndarray) -> str:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rows", type=int, default=10_000)
+    parser.add_argument("--queries", type=int, default=100)
+    parser.add_argument("--dim", type=int, default=128)
+    args = parser.parse_args()
     rng = np.random.default_rng(20261109)
-    rows = rng.normal(size=(10_000, 128)).astype(np.float32)
-    queries = rng.normal(size=(100, 128)).astype(np.float32)
+    rows = rng.normal(size=(args.rows, args.dim)).astype(np.float32)
+    queries = rng.normal(size=(args.queries, args.dim)).astype(np.float32)
     with tempfile.TemporaryDirectory(prefix="mvd-bench-") as tmp:
         client = Client(Path(tmp))
         try:
             started = time.perf_counter()
             client.execute(
-                "CREATE TABLE bench (id BIGINT PRIMARY KEY, cat VARCHAR(8), v VECTOR(128))"
+                f"CREATE TABLE bench (id BIGINT PRIMARY KEY, cat VARCHAR(8), v VECTOR({args.dim}))"
             )
             for start in range(0, len(rows), 100):
                 values = []
@@ -53,8 +59,8 @@ def main() -> int:
         finally:
             client.stop()
     print(
-        f"10,000 writes: {write_time:.3f}s; "
-        f"100 TopK queries: {query_time:.3f}s"
+        f"{args.rows:,} writes: {write_time:.3f}s; "
+        f"{args.queries:,} TopK queries: {query_time:.3f}s"
     )
     return 0
 
