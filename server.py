@@ -1180,27 +1180,17 @@ def split_statements(text: str, at_eof: bool) -> tuple[list[str], str]:
     return statements, remainder
 
 
-def render_value(value: Any) -> str:
-    if value is None:
-        return "NULL"
-    if isinstance(value, np.ndarray):
-        return "[" + ",".join(f"{float(x):.6g}" for x in value) + "]"
-    if isinstance(value, float):
-        return f"{value:.6f}"
-    return str(value)
-
-
-def execute_statement(db: Database, sql: str) -> tuple[list[str] | None, int | None]:
-    stmt = Parser(sql).parse()
-    columns, rows, affected = db.execute(stmt, sql=sql)
-    if columns is not None and rows is not None:
-        for row in rows:
-            print("\t".join(render_value(value) for value in row), flush=True)
-    elif affected is not None:
-        print(f"OK {affected}", flush=True)
-    else:
-        print("OK", flush=True)
-    return columns, affected
+def emit_json(message: dict[str, Any]) -> None:
+    sys.stdout.write(
+        json.dumps(
+            message,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    sys.stdout.flush()
 
 
 def main() -> int:
@@ -1209,15 +1199,7 @@ def main() -> int:
     sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--data-dir", default="/data")
-    parser.add_argument("--ready-marker", default="")
     parser.add_argument("--vector-mode", choices=("exact", "ann"), default="exact")
-    parser.add_argument("--header", action="store_true")
-    parser.add_argument("--row-separator", default="\t")
-    parser.add_argument("--numeric-errors", action="store_true")
-    parser.add_argument("--page-size", default=None)
-    parser.add_argument("--pool-pages", default=None)
-    parser.add_argument("--ivf-nprobe", default=None)
-    parser.add_argument("--checkpoint-mb", default=None)
     args, _unknown = parser.parse_known_args()
 
     db = Database(Path(args.data_dir))
@@ -1230,36 +1212,81 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
 
-    pending = ""
+    emit_json({"type": "ready"})
     try:
-        while True:
-            line = sys.stdin.readline()
-            if line == "":
-                statements, pending = split_statements(pending, True)
-                for sql in statements:
-                    process_one(db, sql, args)
-                break
-            pending += line
-            statements, pending = split_statements(pending, False)
-            for sql in statements:
-                process_one(db, sql, args)
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            request_id: Any = None
+            try:
+                request = json.loads(line)
+                if not isinstance(request, dict):
+                    raise sql_error("invalid_request", "request must be an object")
+                request_id = request.get("id")
+                op = request.get("op")
+                if op == "shutdown":
+                    db.close()
+                    emit_json({"id": request_id, "ok": True})
+                    return 0
+                if op != "execute":
+                    raise sql_error("invalid_request", "unsupported operation")
+                sql = request.get("sql")
+                if not isinstance(sql, str):
+                    raise sql_error("invalid_request", "sql must be a string")
+                mode = request.get("search_mode", "exact")
+                if mode not in ("exact", "ann"):
+                    raise sql_error("invalid_request", "invalid search_mode")
+                db.vector_mode = mode
+                statement_sql = sql.strip().rstrip(";")
+                statement = Parser(statement_sql).parse()
+                columns, rows, affected = db.execute(statement, sql=statement_sql)
+                response: dict[str, Any] = {"id": request_id, "ok": True}
+                if columns is not None and rows is not None:
+                    response["columns"] = columns
+                    response["rows"] = [
+                        [
+                            value.tolist() if isinstance(value, np.ndarray) else value
+                            for value in row
+                        ]
+                        for row in rows
+                    ]
+                elif affected is not None:
+                    response["affected_rows"] = affected
+                emit_json(response)
+            except DBError as exc:
+                emit_json(
+                    {
+                        "id": request_id,
+                        "ok": False,
+                        "error": {"code": exc.code, "message": exc.message},
+                    }
+                )
+            except json.JSONDecodeError as exc:
+                emit_json(
+                    {
+                        "id": request_id,
+                        "ok": False,
+                        "error": {
+                            "code": "invalid_json",
+                            "message": f"invalid JSON request: {exc.msg}",
+                        },
+                    }
+                )
+            except Exception as exc:
+                print(f"internal error: {exc}", file=sys.stderr, flush=True)
+                emit_json(
+                    {
+                        "id": request_id,
+                        "ok": False,
+                        "error": {
+                            "code": "internal_error",
+                            "message": str(exc),
+                        },
+                    }
+                )
     finally:
         db.close()
     return 0
-
-
-def process_one(db: Database, sql: str, args: argparse.Namespace) -> None:
-    try:
-        execute_statement(db, sql)
-    except DBError as exc:
-        code = str(exc.code)
-        print(f"ERROR {code}: {exc.message}", flush=True)
-        print("", file=sys.stderr, flush=True)
-    except Exception as exc:
-        print(f"ERROR internal_error: {exc}", flush=True)
-        print(f"internal error: {exc}", file=sys.stderr, flush=True)
-    if args.ready_marker:
-        print(args.ready_marker, flush=True)
 
 
 if __name__ == "__main__":

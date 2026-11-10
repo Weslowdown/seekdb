@@ -10,9 +10,9 @@ docker build -t minivectordb .
 docker run -i --rm -v "$PWD/data:/data" minivectordb
 ```
 
-The process exchanges statements over stdin/stdout. Persistent state and the
-append-only transaction journal are written below `/data`. All diagnostics go
-to stderr.
+The process uses the official JSON Lines protocol over stdin/stdout. Persistent
+state and the append-only transaction journal are written below `/data`. All
+diagnostics go to stderr.
 
 ## Supported SQL
 
@@ -29,10 +29,17 @@ equal to 1.0 while avoiding approximate-index recall risk.
 
 ## I/O protocol
 
-Queries return tab-separated rows. Mutations return `OK <affected_rows>` and
-other successful statements return `OK`. Errors return
-`ERROR <semantic_name>: <message>`. An optional `--ready-marker` value is
-printed after each response.
+Startup emits exactly:
+
+```json
+{"type":"ready"}
+```
+
+Each input line is an `execute` request with an `id`, SQL text, and
+`search_mode`. Query responses contain `id`, `ok`, `columns`, and `rows`;
+mutation responses additionally contain `affected_rows`; failures contain a
+structured `error` object. `{"op":"shutdown"}` rolls back unfinished work,
+returns `{"id":...,"ok":true}`, and exits with status zero.
 
 ## Durability
 
@@ -81,6 +88,11 @@ python tests/run_extended.py # limits, Unicode, transaction visibility
 python tests/run_crash.py    # SIGKILL and torn-journal recovery
 python tests/bench_small.py  # 10k x 128-d smoke benchmark
 ```
+
+The official `protocol_check/run.py` from
+`oceanbase/seekdb@2026-competition-round2` was also run with the trusted
+`--command` mode. All 20 public cases passed; the recorded report is in
+`verification/official-public-protocol-result.json`.
 
 The latest local benchmark measured 18.612 seconds for 10,000
 128-dimensional writes and 3.034 seconds for 1,000 TopK queries on a Windows

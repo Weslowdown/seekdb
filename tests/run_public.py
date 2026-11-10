@@ -14,13 +14,12 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MARKER = "__MVD_READY__"
-
-
 class Client:
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
         self.process: subprocess.Popen[str] | None = None
+        self.next_id = 1
+        self.search_mode = "exact"
         self.start()
 
     def start(self) -> None:
@@ -29,7 +28,6 @@ class Client:
                 sys.executable,
                 str(ROOT / "server.py"),
                 f"--data-dir={self.data_dir}",
-                f"--ready-marker={MARKER}",
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -38,11 +36,25 @@ class Client:
             encoding="utf-8",
             bufsize=1,
         )
+        assert self.process.stdout is not None
+        ready = json.loads(self.process.stdout.readline())
+        if ready != {"type": "ready"}:
+            raise RuntimeError(f"invalid ready handshake: {ready!r}")
 
     def stop(self) -> None:
         if self.process is None:
             return
         assert self.process.stdin is not None
+        request_id = self.next_id
+        self.next_id += 1
+        self.process.stdin.write(
+            json.dumps({"id": request_id, "op": "shutdown"}) + "\n"
+        )
+        self.process.stdin.flush()
+        assert self.process.stdout is not None
+        response = json.loads(self.process.stdout.readline())
+        if response != {"id": request_id, "ok": True}:
+            raise RuntimeError(f"invalid shutdown response: {response!r}")
         self.process.stdin.close()
         try:
             self.process.wait(timeout=10)
@@ -54,17 +66,44 @@ class Client:
     def execute(self, sql: str) -> list[str]:
         assert self.process is not None and self.process.stdin is not None
         assert self.process.stdout is not None
-        self.process.stdin.write(sql.rstrip(";") + ";\n")
+        request_id = self.next_id
+        self.next_id += 1
+        self.process.stdin.write(
+            json.dumps(
+                {
+                    "id": request_id,
+                    "op": "execute",
+                    "sql": sql.rstrip(";") + ";",
+                    "search_mode": self.search_mode,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
         self.process.stdin.flush()
-        lines: list[str] = []
-        while True:
-            line = self.process.stdout.readline()
-            if line == "":
-                raise RuntimeError("database exited unexpectedly")
-            line = line.rstrip("\r\n")
-            if line == MARKER:
-                return lines
-            lines.append(line)
+        line = self.process.stdout.readline()
+        if line == "":
+            raise RuntimeError("database exited unexpectedly")
+        response = json.loads(line)
+        if response.get("id") != request_id:
+            raise RuntimeError(f"response id mismatch: {response!r}")
+        if not response.get("ok"):
+            error = response.get("error") or {}
+            return [f"ERROR {error.get('code', '')}: {error.get('message', '')}"]
+        if "rows" in response:
+            return [
+                "\t".join(_render_test_value(value) for value in row)
+                for row in response["rows"]
+            ]
+        if "affected_rows" in response:
+            return [f"OK {response['affected_rows']}"]
+        return ["OK"]
+
+
+def _render_test_value(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.6f}"
+    return str(value)
 
 
 def cast_like(raw: str, expected: Any) -> Any:
@@ -130,7 +169,7 @@ def run_case(client: Client, test_path: Path, result_path: Path) -> tuple[bool, 
             client.start()
             continue
         if sql.startswith("--mode "):
-            client.execute(f"SET vector_mode = {sql.split()[1]}")
+            client.search_mode = sql.split()[1]
             continue
         if sql.startswith("--"):
             continue

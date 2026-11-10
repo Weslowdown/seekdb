@@ -88,6 +88,13 @@
       "command": "python tests/run_public.py; python tests/run_extended.py; python tests/run_crash.py",
       "output": "20/20 public cases passed; extended limits/transaction tests passed; SIGKILL and torn-journal recovery passed after the performance changes.",
       "student_interpretation": null
+    },
+    {
+      "id": "e6",
+      "title": "Official JSONL protocol check",
+      "command": "python run.py --command '[\"python\", \"server.py\", \"--data-dir={data_dir}\"]' --package ../../work/minivectordb/mysqltest --output protocol-results/20261110-184416",
+      "output": "The official protocol checker reported PASS for ready/shutdown framing and all 20 public cases. Recorded in verification/official-public-protocol-result.json.",
+      "student_interpretation": null
     }
   ],
   "retrospective": {
