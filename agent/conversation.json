@@ -3,6 +3,7 @@
   "synthetic": false,
   "project": "2026 OceanBase database competition - MiniVectorDB tie-breaker",
   "scope": "Records available from the student's competition conversation. No hidden chain-of-thought is included.",
+  "provenance": "The five detailed explanations in c10-c14 were written by the student after a study-oriented explanation. They are retained as student-authored understanding, not presented as independent discovery.",
   "conversations": [
     {
       "id": "c1",
@@ -51,6 +52,103 @@
       "role": "student",
       "content": "现在通过你刚才总结出来的内容再次完善优化我的题目仓库的代码，让我尽可能拿到高分",
       "context": "The student requested a second optimization pass after reviewing the distinction between the functional gate, performance ranking, and Agent prompt evidence."
+    },
+    {
+      "id": "c10",
+      "role": "student",
+      "content": "需要我们先过滤之后再计算 TopK。如果先在全表当中取得最近的K条再进行过滤，那么最近的K条可能会因为全部不满足 WHERE，从而导致返回的是空结果或者记录数不足。所以正确的语义是在满足所有条件的记录集合当中取距离最近的K条。",
+      "context": "Student explanation after studying filtered TopK semantics."
+    },
+    {
+      "id": "c11",
+      "role": "student",
+      "content": "返回主键2。记录与记录之间距离相同，当我们按照升序去排列主键时，例如主键2排在主键3前面。那么这个并列规则必须在LIMIT之前执行，否则可能会因为生成错误而截掉较小主键。",
+      "context": "Student explanation after studying deterministic tie handling."
+    },
+    {
+      "id": "c12",
+      "role": "student",
+      "content": "已确认 COMMIT 成功的数据必须保留。重启之后，我们应该看到完整存在的已提交的记录、表结构和持久化索引；还没有进行提交事务必须整体消失，不能只保留当中的一部分。程序应该在返回 COMMIT 成功前完成日志写入和 fsync。",
+      "context": "Student explanation after studying commit durability and rollback semantics."
+    },
+    {
+      "id": "c13",
+      "role": "student",
+      "content": "主要减少了重复距离计算和无效排序。原来为Python循环计算距离并且每一条都为单独循环，并且对大量结果执行完整排序。改优化为NumPy之间向量化的距离计算，之后用argpartition找出TopK的候选，再只对候选集进行排序，不考虑其他，因此查询耗时明显下降。",
+      "context": "Student explanation supplied after the measured query-kernel optimization."
+    },
+    {
+      "id": "c14",
+      "role": "student",
+      "content": "我的推测是先运用精确检索会扫描所有符合条件的记录，因此Recall@10是1.0。我的ANN只访问部分候选，所以我们尽可能运用已经存在的数据值，虽然速度快但可能漏掉相关的真实近邻。然而比赛要求过滤和不带过滤查询的平均Recall@10都至少达到0.95；任一组低于阈值，所以整个性能项就无效并记为0分。",
+      "context": "Student explanation after studying the exact/ANN recall tradeoff."
+    }
+  ],
+  "evidence_units": [
+    {
+      "id": "u1",
+      "dimension": "问题理解与自主拆解",
+      "student_evidence": {
+        "pointer": "/conversations/9/content",
+        "quote": "正确的语义是在满足所有条件的记录集合当中取距离最近的K条"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/0/output",
+        "quote": "20/20 public cases passed"
+      },
+      "context": "The student explicitly explained why filtering precedes TopK; the public suite confirms filtered TopK behavior."
+    },
+    {
+      "id": "u2",
+      "dimension": "技术理解与迁移",
+      "student_evidence": {
+        "pointer": "/conversations/10/content",
+        "quote": "这个并列规则必须在LIMIT之前执行，否则可能会因为生成错误而截掉较小主键"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/0/output",
+        "quote": "filtered TopK"
+      },
+      "context": "The student connected deterministic ordering to the LIMIT boundary; the tie/filter case passes."
+    },
+    {
+      "id": "u3",
+      "dimension": "独立验证与质疑",
+      "student_evidence": {
+        "pointer": "/conversations/11/content",
+        "quote": "还没有进行提交事务必须整体消失，不能只保留当中的一部分"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/2/output",
+        "quote": "PASS crash recovery; committed rows survive SIGKILL and an uncommitted delete does not survive restart."
+      },
+      "context": "The student stated the expected crash boundary and the forced-termination test produced the corresponding result."
+    },
+    {
+      "id": "u4",
+      "dimension": "实验与反馈迭代",
+      "student_evidence": {
+        "pointer": "/conversations/12/content",
+        "quote": "主要减少了重复距离计算和无效排序"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/3/output",
+        "quote": "After the query-kernel optimization: 10,000 writes: 18.612s; 1,000 TopK queries: 3.034s"
+      },
+      "context": "The student linked the measured query change to vectorization and candidate selection rather than claiming an unsupported cause."
+    },
+    {
+      "id": "u5",
+      "dimension": "取舍与反思",
+      "student_evidence": {
+        "pointer": "/conversations/13/content",
+        "quote": "虽然速度快但可能漏掉相关的真实近邻"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/5/output",
+        "quote": "all 20 public cases"
+      },
+      "context": "The student explained the exact-versus-ANN recall tradeoff; the implementation deliberately uses exact search for safety."
     }
   ],
   "experiments": [
@@ -94,6 +192,13 @@
       "title": "Official JSONL protocol check",
       "command": "python run.py --command '[\"python\", \"server.py\", \"--data-dir={data_dir}\"]' --package ../../work/minivectordb/mysqltest --output protocol-results/20261110-184416",
       "output": "The official protocol checker reported PASS for ready/shutdown framing and all 20 public cases. Recorded in verification/official-public-protocol-result.json.",
+      "student_interpretation": null
+    },
+    {
+      "id": "e7",
+      "title": "Official submission result before Agent material revision",
+      "command": "OceanBase training-camp submission page",
+      "output": "MySQL official cases passed. Performance evaluation completed with raw E = 220.755042. Agent Prompt evaluation completed with raw score 0.",
       "student_interpretation": null
     }
   ],
