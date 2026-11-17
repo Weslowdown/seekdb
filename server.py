@@ -960,13 +960,18 @@ class Database:
             if query.size != table.columns[vector_index].size:
                 raise sql_error("dimension_mismatch", "query vector dimension mismatch")
             if matched_positions.size:
-                candidate_vectors = matrix[matched_positions]
+                candidate_vectors = (
+                    matrix[matched_positions] if stmt["where"] else matrix
+                )
+                candidate_norms = (
+                    vector_norms[matched_positions] if stmt["where"] else vector_norms
+                )
                 if candidate_vectors.size and np.max(np.abs(candidate_vectors)) > 1.0e18:
                     products = candidate_vectors.astype(np.float64) @ query.astype(np.float64)
                 else:
                     products = candidate_vectors @ query
                 squared = (
-                    vector_norms[matched_positions]
+                    candidate_norms
                     + np.dot(query.astype(np.float64), query.astype(np.float64))
                     - 2.0 * products
                 )

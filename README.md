@@ -94,8 +94,8 @@ The official `protocol_check/run.py` from
 `--command` mode. All 20 public cases passed; the recorded report is in
 `verification/official-public-protocol-result.json`.
 
-The latest local benchmark measured 18.612 seconds for 10,000
-128-dimensional writes and 3.034 seconds for 1,000 TopK queries on a Windows
+The latest local benchmark measured 11.556 seconds for 10,000
+128-dimensional writes and 1.929 seconds for 1,000 TopK queries on a Windows
 development host. The development machine does not have Docker, so the image
 itself was not built locally. The Dockerfile uses a pinned NumPy release and
 does not require network access at runtime.
