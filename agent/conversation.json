@@ -82,6 +82,12 @@
       "role": "student",
       "content": "我的推测是先运用精确检索会扫描所有符合条件的记录，因此Recall@10是1.0。我的ANN只访问部分候选，所以我们尽可能运用已经存在的数据值，虽然速度快但可能漏掉相关的真实近邻。然而比赛要求过滤和不带过滤查询的平均Recall@10都至少达到0.95；任一组低于阈值，所以整个性能项就无效并记为0分。",
       "context": "Student explanation after studying the exact/ANN recall tradeoff."
+    },
+    {
+      "id": "c15",
+      "role": "student",
+      "content": "我上一轮误套用了“SQL 未写次级排序时，并列行顺序不确定”的一般规则，忽略了该系统明确规定的“距离相同时按主键升序”这一补充规则。完整排序结果是 id=4（距离0）→id=2（距离1）→id=5（距离1）→id=1（距离2）。OFFSET 1 在排序完成后跳过唯一距离为0的id=4，剩余前两行是距离并列的id=2和id=5；由于主键升序规则同样作用于这两个并列项，而且2<5，所以返回顺序必然是2、5。",
+      "context": "Student correction after the actual tie/offset experiment."
     }
   ],
   "evidence_units": [
@@ -96,20 +102,21 @@
         "pointer": "/experiments/0/output",
         "quote": "20/20 public cases passed"
       },
-      "context": "The student explicitly explained why filtering precedes TopK; the public suite confirms filtered TopK behavior."
+      "context": "The student explained why filtering precedes TopK; the public suite confirms filtered TopK behavior."
     },
     {
       "id": "u2",
       "dimension": "技术理解与迁移",
       "student_evidence": {
-        "pointer": "/conversations/10/content",
-        "quote": "这个并列规则必须在LIMIT之前执行，否则可能会因为生成错误而截掉较小主键"
+        "pointer": "/conversations/14/content",
+        "quote": "由于主键升序规则同样作用于这两个并列项，而且2<5，所以返回顺序必然是2、5"
       },
       "result_evidence": {
-        "pointer": "/experiments/0/output",
-        "quote": "filtered TopK"
+        "pointer": "/experiments/11/output",
+        "quote": "tie_offset: [[2, 1.0], [5, 1.0]]"
       },
-      "context": "The student connected deterministic ordering to the LIMIT boundary; the tie/filter case passes."
+      "prediction_before_result": "/conversations/10/content",
+      "context": "The student initially said tie order was unspecified, then corrected that assumption after the measured tie/offset result."
     },
     {
       "id": "u3",
@@ -119,8 +126,8 @@
         "quote": "还没有进行提交事务必须整体消失，不能只保留当中的一部分"
       },
       "result_evidence": {
-        "pointer": "/experiments/2/output",
-        "quote": "PASS crash recovery; committed rows survive SIGKILL and an uncommitted delete does not survive restart."
+        "pointer": "/experiments/8/output",
+        "quote": "committed_delete_after_kill: []"
       },
       "context": "The student stated the expected crash boundary and the forced-termination test produced the corresponding result."
     },
@@ -145,8 +152,8 @@
         "quote": "虽然速度快但可能漏掉相关的真实近邻"
       },
       "result_evidence": {
-        "pointer": "/experiments/5/output",
-        "quote": "all 20 public cases"
+        "pointer": "/experiments/9/output",
+        "quote": "float32_rounding: [[1, 0.0]]"
       },
       "context": "The student explained the exact-versus-ANN recall tradeoff; the implementation deliberately uses exact search for safety."
     }
@@ -200,6 +207,41 @@
       "command": "OceanBase training-camp submission page",
       "output": "MySQL official cases passed. Performance evaluation completed with raw E = 220.755042. Agent Prompt evaluation completed with raw score 0.",
       "student_interpretation": null
+    },
+    {
+      "id": "e8",
+      "title": "Student prediction: distance tie and OFFSET",
+      "command": "python tests/run_student_experiments.py",
+      "output": "tie_offset: [[2, 1.0], [5, 1.0]]",
+      "student_interpretation": "The IDs were predicted correctly, but the student initially and incorrectly treated their order as unspecified. After the result, the student identified and corrected that assumption using the competition's primary-key tie-break rule."
+    },
+    {
+      "id": "e9",
+      "title": "Student prediction: committed delete after SIGKILL",
+      "command": "python tests/run_student_experiments.py",
+      "output": "committed_delete_after_kill: []",
+      "student_interpretation": "The prediction was that a confirmed committed delete remains durable and the row is absent after restart; the actual result agrees."
+    },
+    {
+      "id": "e10",
+      "title": "Student prediction: float32 rounding",
+      "command": "python tests/run_student_experiments.py",
+      "output": "float32_rounding: [[1, 0.0]]",
+      "student_interpretation": "The prediction was that 16777217 rounds to 16777216 in float32 and therefore has zero distance to 16777216; the actual result agrees."
+    },
+    {
+      "id": "e11",
+      "title": "Official submission after student evidence revision",
+      "command": "OceanBase training-camp submission page",
+      "output": "MySQL official cases passed. Performance evaluation completed with raw E = 215.123626. Agent Prompt evaluation completed with raw score 2.5.",
+      "student_interpretation": null
+    },
+    {
+      "id": "e12",
+      "title": "Post-correction repeat of distance tie and OFFSET",
+      "command": "python tests/run_student_experiments.py",
+      "output": "tie_offset: [[2, 1.0], [5, 1.0]]",
+      "student_interpretation": "After correcting the tie-order assumption, the same result remained stable: the primary-key tie-break produced id 2 before id 5, and OFFSET removed id 4 first."
     }
   ],
   "retrospective": {
